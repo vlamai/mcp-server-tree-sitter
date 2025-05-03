@@ -1,11 +1,11 @@
 """MCP server implementation for Tree-sitter with dependency injection."""
 
-import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 
 from mcp.server.fastmcp import FastMCP
 
+from .bootstrap import get_logger, update_log_levels
 from .config import ServerConfig
 from .di import DependencyContainer, get_container
 
@@ -13,7 +13,7 @@ from .di import DependencyContainer, get_container
 mcp = FastMCP("tree_sitter")
 
 # Set up logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def configure_with_context(
@@ -82,19 +82,9 @@ def configure_with_context(
         logger.info(f"Setting log_level to {log_level}")
         config_manager.update_value("log_level", log_level)
 
-        # Apply log level directly to loggers
-        log_level_value = getattr(logging, log_level, None)
-        if log_level_value is not None:
-            # Apply to root logger - this should cascade to all child loggers unless they override it
-            root_logger = logging.getLogger("mcp_server_tree_sitter")
-            root_logger.setLevel(log_level_value)
-
-            # Override on all existing loggers to ensure immediate propagation
-            for name in logging.root.manager.loggerDict:
-                if name == "mcp_server_tree_sitter" or name.startswith("mcp_server_tree_sitter."):
-                    logging.getLogger(name).setLevel(log_level_value)
-
-            logger.info(f"Applied log level {log_level} to mcp_server_tree_sitter loggers")
+        # Apply log level using already imported update_log_levels
+        update_log_levels(log_level)
+        logger.info(f"Applied log level {log_level} to mcp_server_tree_sitter loggers")
 
     # Get final configuration
     config = config_manager.get_config()
@@ -111,9 +101,48 @@ def configure_with_context(
 
 
 def main() -> None:
-    """Run the server"""
+    """Run the server with command-line argument handling"""
+    import argparse
+    import sys
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="MCP Tree-sitter Server - Code analysis with tree-sitter")
+    parser.add_argument("--config", help="Path to configuration file")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--disable-cache", action="store_true", help="Disable parse tree caching")
+    parser.add_argument("--version", action="store_true", help="Show version and exit")
+
+    # Parse arguments - this handles --help automatically
+    args = parser.parse_args()
+
+    # Handle version display
+    if args.version:
+        import importlib.metadata
+
+        try:
+            version = importlib.metadata.version("mcp-server-tree-sitter")
+            print(f"mcp-server-tree-sitter version {version}")
+        except importlib.metadata.PackageNotFoundError:
+            print("mcp-server-tree-sitter (version unknown - package not installed)")
+        sys.exit(0)
+
+    # Set up debug logging if requested
+    if args.debug:
+        update_log_levels("DEBUG")
+        logger.debug("Debug logging enabled")
+
     # Get the container
     container = get_container()
+
+    # Configure with provided options
+    if args.config:
+        logger.info(f"Loading configuration from {args.config}")
+        container.config_manager.load_from_file(args.config)
+
+    if args.disable_cache:
+        logger.info("Disabling parse tree cache as requested")
+        container.config_manager.update_value("cache.enabled", False)
+        container.tree_cache.set_enabled(False)
 
     # Register capabilities and tools
     from .capabilities import register_capabilities
@@ -130,6 +159,7 @@ def main() -> None:
     container.tree_cache.set_enabled(config.cache.enabled)
 
     # Run the server
+    logger.info("Starting MCP Tree-sitter Server")
     mcp.run()
 
 
